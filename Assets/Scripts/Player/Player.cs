@@ -1,38 +1,73 @@
 using UnityEngine;
 using UnityEngine.InputSystem;
 
+[DefaultExecutionOrder(0)]
 [RequireComponent(typeof(CharacterController))]
 public class Player : MonoBehaviour
 {
+    // ---------- Look ----------
     [Header("Look")]
     public float mouseSensitivity = 0.1f;
     public Transform cameraPivot; // optionnel (pitch)
     float yaw, pitch;
 
+    // ---------- Refs ----------
     [Header("Refs")]
     public InputReader input;
     public MovementDataSO data;
     public PlayerDebug debugHUD;
 
-    [Header("Runtime")]
-    public Vector3 velocity;       // world-space
+    // ---------- Runtime (lecture debug) ----------
+    [Header("Runtime (read-only in play)")]
+    public Vector3 velocity;          // world-space
     public int jumpCount;
-    public float coyoteTimer;      // temps depuis la dernière frame au sol (reset quand grounded)
-    public float timeInAir;        // pour gravité progressive
-    public float slopeTimer;       // temps passé à glisser sur la même pente
+    public float coyoteTimer;         // temps depuis la dernière frame au sol
+    public float timeInAir;           // pour gravité progressive
+    public float slopeTimer;          // temps passé à glisser sur la même pente
     public bool isGrounded;
+    public bool nearSteepSlope;       // proche d'une pente > CC.slopeLimit
     public Vector3 groundNormal = Vector3.up;
-    public float groundDistance;       // distance au sol sous les pieds
-    public bool nearSteepSlope;        // vrai si pente raide sous les pieds
+    public float groundDistance;
+    [HideInInspector] public Vector3 lastWallNormal;
+    [HideInInspector] public float lastWallTime;
 
-    // interne
+    // ---------- Internes ----------
     CharacterController controller;
     StateMachine fsm = new StateMachine();
-
-    // buffers
     float jumpBufferTimer;
-    float initialStepOffset;
+    float initialStepOffset, lastStepOffset;
+    public float gravityScale = 1f;
 
+    // base planaire (recalculée 1x/frame)
+    Vector3 planarFwd, planarRight;
+
+    // Const offsets ground check
+    const float kGroundUpOffset = 0.10f;
+    const float kCloseBias = 0.15f;
+
+    // Helpers pente
+    float WalkableLimitDeg() => controller.slopeLimit;                    // limite "walkable" du CC
+    public bool IsTooSteep(Vector3 n) => Vector3.Angle(n, Vector3.up) > data.slopeSlideThresholdDeg;
+
+    public float HorizontalSpeed => Vector3.ProjectOnPlane(velocity, Vector3.up).magnitude;
+    public float SlopeAngleDeg => Vector3.Angle(groundNormal, Vector3.up);
+
+    public void MarkLeftWall(Vector3 normal)
+    {
+        lastWallNormal = normal.normalized;
+        lastWallTime = Time.time;
+    }
+
+    public bool CanRegrabOppositeWall(Vector3 candNormal)
+    {
+        // seulement dans la fenêtre de grâce
+        if (Time.time - lastWallTime > data.wallRegrabGrace) return false;
+        // opposé à > ~120° (dot <= -0.5)
+        return Vector3.Dot(candNormal.normalized, lastWallNormal) <= -0.5f;
+    }
+
+
+    // ---------- Unity ----------
     void Awake()
     {
         controller = GetComponent<CharacterController>();
@@ -42,172 +77,187 @@ public class Player : MonoBehaviour
         Cursor.visible = false;
         yaw = transform.eulerAngles.y;
 
-        controller = GetComponent<CharacterController>();
         initialStepOffset = controller.stepOffset;
-        controller.minMoveDistance = 0f;
+        lastStepOffset = initialStepOffset;
+        controller.minMoveDistance = 0f; // autorise micro-glisse
+
+        // État initial
+        fsm.ChangeState(new GroundedState(this));
     }
 
     void Update()
     {
-        fsm.Tick();
+        BuildPlanarBasis();
 
-        ApplyUniversalMovement(Time.deltaTime);
-        controller.Move(velocity * Time.deltaTime);
-        //FaceMovementDirection();
-        ApplyLook();
-
-        debugHUD?.SetDirty();
-    }
-
-    // ---------- Universal Movement ----------
-    void ApplyUniversalMovement(float dt)
-    {
+        // 1) Grounding d'abord (les States en dépendent)
         UpdateGrounding();
 
-        // --- JUMP: buffer & coyote ---
-        if (input.ConsumeJumpPressed())
-            jumpBufferTimer = data.jumpBuffer;
+        // 2) States : gèrent Move + Jump
+        fsm.Tick();
 
-        if (isGrounded)
-        {
-            timeInAir = 0f;
-            coyoteTimer = 0f;
-            jumpCount = 0;
+        // 3) Transversal : glisse + gravité
+        float dt = Time.deltaTime;
 
-            if (jumpBufferTimer > 0f && CanJump())
-                DoJumpFromGround();
-        }
-        else
-        {
-            coyoteTimer += dt;
-            timeInAir += dt;
-            if (jumpBufferTimer > 0f && CanJump())
-                DoJumpInAir(); // double, triple, etc.
-        }
-
-        jumpBufferTimer -= dt;
-
-        // --- Horizontal input ---
-        Vector3 wishDir = GetWishDirectionOnPlane();
-        ApplyGroundOrAirAcceleration(wishDir, dt);
-
-        // --- Slope slide (glisse si pente trop raide), même si CC n'est pas "grounded" ---
         if ((isGrounded || nearSteepSlope) && IsTooSteep(groundNormal))
             ApplySlopeSlide(groundNormal, dt);
         else
             slopeTimer = 0f;
 
-        // --- Gravity progressive ---
         ApplyProgressiveGravity(dt);
 
-        // --- Freinage au sol si pas d'input ---
-        if (isGrounded && !IsTooSteep(groundNormal) && wishDir.sqrMagnitude < 0.0001f)
-            ApplyGroundFriction(dt);
+        // 4) Déplacement (unique)
+        controller.Move(velocity * dt);
 
-        controller.stepOffset = (IsTooSteep(groundNormal) ? 0f : initialStepOffset);
+        // 5) StepOffset dynamique (évite de "remonter" une pente raide)
+        SetStepOffset(IsTooSteep(groundNormal) ? 0f : initialStepOffset);
+
+        // 6) Debug
+        debugHUD?.SetDirty();
     }
 
+    void LateUpdate() => ApplyLook();
+
+    // ---------- Sol / Pentes ----------
     void UpdateGrounding()
     {
-        isGrounded = controller.isGrounded;
+        // Reset simples
         groundNormal = Vector3.up;
-
-        Vector3 ccCenter = transform.TransformPoint(controller.center);
-        float bottomOffset = controller.height * 0.5f - controller.radius;
-        Vector3 feet = ccCenter + Vector3.down * (bottomOffset - 0.01f);
-
         groundDistance = Mathf.Infinity;
         nearSteepSlope = false;
 
-        // spherecast très court sous les pieds
-        float castRadius = controller.radius * 0.98f;
-        float castDist = data.groundCheckExtra + 0.35f;
+        // "Pieds" de la capsule
+        Vector3 ccCenter = transform.TransformPoint(controller.center);
+        float bottomOffset = controller.height * 0.5f - controller.radius;
+        Vector3 feet = ccCenter + Vector3.down * (bottomOffset - 0.005f);
 
-        if (Physics.SphereCast(feet + Vector3.up * 0.05f, castRadius, Vector3.down, out var hit, castDist, data.groundMask, QueryTriggerInteraction.Ignore))
+        // SphereCast court, tolérant
+        float castRadius = controller.radius * 0.95f;
+        float castDist = data.groundCheckExtra + 0.50f;
+
+        bool closeToGround = false;
+
+        if (Physics.SphereCast(feet + Vector3.up * kGroundUpOffset, castRadius, Vector3.down,
+                               out var hit, castDist, data.groundMask, QueryTriggerInteraction.Ignore))
         {
             groundNormal = hit.normal;
             groundDistance = hit.distance;
 
-            float slopeLimit = Mathf.Max(data.slopeSlideThresholdDeg, controller.slopeLimit);
-            float angle = Vector3.Angle(hit.normal, Vector3.up);
-            bool closeToGround = hit.distance <= (data.groundCheckExtra + 0.12f);
+            closeToGround = hit.distance <= (data.groundCheckExtra + kCloseBias);
+            float angle = Vector3.Angle(groundNormal, Vector3.up);
+            bool walkable = angle <= WalkableLimitDeg();
 
-            // solide & proche = grounded "fiable"
-            isGrounded |= (Vector3.Dot(hit.normal, Vector3.up) > 0.05f) && closeToGround;
+            // Confiance au CC, et on complète si très proche
+            isGrounded = controller.isGrounded
+                         || (closeToGround && walkable && Vector3.Dot(groundNormal, Vector3.up) > 0.05f);
 
-            // proche d'une pente raide
-            nearSteepSlope = closeToGround && angle > slopeLimit - 0.5f;
-        }
-    }
-
-    Vector3 GetWishDirectionOnPlane()
-    {
-        Vector2 m = input.Move;
-        Vector3 camFwd = transform.forward; // simple: yaw déjà porté par le joueur
-        Vector3 camRight = new Vector3(camFwd.z, 0f, -camFwd.x);
-        Vector3 dir = (camRight * m.x + Vector3.ProjectOnPlane(camFwd, Vector3.up).normalized * m.y);
-        return dir.normalized;
-    }
-
-    void ApplyGroundOrAirAcceleration(Vector3 wishDir, float dt)
-    {
-        Vector3 horizVel = Vector3.ProjectOnPlane(velocity, Vector3.up);
-
-        if (isGrounded && !IsTooSteep(groundNormal))
-        {
-            float target = data.maxGroundSpeed;
-            Vector3 desired = wishDir * target;
-            Vector3 delta = desired - horizVel;
-            Vector3 step = Vector3.ClampMagnitude(delta, data.accelGround * dt);
-            velocity += Vector3.ProjectOnPlane(step, Vector3.up);
+            // Trop raide pour marcher mais proche = glisse potentielle
+            nearSteepSlope = closeToGround && !walkable;
         }
         else
         {
-            float vertical = velocity.y;
-            float factor = vertical >= 0f ? data.airControlAscendFactor : data.airControlDescendFactor;
-
-            Vector3 desired = wishDir * data.maxAirSpeed;
-            Vector3 delta = desired - horizVel;
-            Vector3 step = Vector3.ClampMagnitude(delta, data.accelAir * factor * dt);
-            velocity += Vector3.ProjectOnPlane(step, Vector3.up);
+            isGrounded = false; // rien sous les pieds
         }
     }
 
-    bool IsTooSteep(Vector3 n)
+    // ---------- Accélération (utilisées par les States) ----------
+    void BuildPlanarBasis()
     {
-        float angle = Vector3.Angle(n, Vector3.up);
-        return angle > data.slopeSlideThresholdDeg;
+        planarFwd = Vector3.ProjectOnPlane(transform.forward, Vector3.up);
+        planarFwd.y = 0f;
+        if (planarFwd.sqrMagnitude < 1e-6f) planarFwd = Vector3.forward;
+        planarFwd.Normalize();
+        planarRight = new Vector3(planarFwd.z, 0f, -planarFwd.x);
+    }
+
+    public Vector3 GetWishDirectionOnPlane()
+    {
+        Vector2 m = input.Move;
+        if (m.sqrMagnitude < 1e-6f) return Vector3.zero;
+        return (planarRight * m.x + planarFwd * m.y).normalized;
+    }
+
+    public void ApplyGroundAcceleration(Vector3 wishDir, float dt)
+    {
+        Vector3 horizVel = Vector3.ProjectOnPlane(velocity, Vector3.up);
+
+        // Direction souhaitée sur le plan du sol
+        Vector3 wishGround = Vector3.ProjectOnPlane(wishDir, groundNormal).normalized;
+
+        // Pénalité en montée
+        Vector3 downSlope = Vector3.ProjectOnPlane(Vector3.down, groundNormal).normalized;
+        float uphill = Mathf.Clamp01(Vector3.Dot(wishGround, -downSlope)); // 0=plat/descente, 1=montée
+        float speedScale = Mathf.Lerp(1f, data.uphillSpeedScale, uphill);
+        float accelScale = Mathf.Lerp(1f, data.uphillAccelScale, uphill);
+
+        float target = data.maxGroundSpeed * speedScale;
+        Vector3 desired = wishGround * target;
+
+        Vector3 delta = desired - horizVel;
+        Vector3 step = Vector3.ClampMagnitude(delta, data.accelGround * accelScale * dt);
+
+        velocity += Vector3.ProjectOnPlane(step, groundNormal);
+    }
+
+    public void ApplyAirAcceleration(Vector3 wishDir, float dt)
+    {
+        Vector3 horizVel = Vector3.ProjectOnPlane(velocity, Vector3.up);
+        float factor = (velocity.y >= 0f) ? data.airControlAscendFactor : data.airControlDescendFactor;
+
+        Vector3 desired = wishDir * data.maxAirSpeed;
+        Vector3 delta = desired - horizVel;
+        Vector3 step = Vector3.ClampMagnitude(delta, data.accelAir * factor * dt);
+        velocity += Vector3.ProjectOnPlane(step, Vector3.up);
+    }
+
+    public void ApplyGroundFriction(float dt)
+    {
+        Vector3 horiz = Vector3.ProjectOnPlane(velocity, Vector3.up);
+        if (horiz.sqrMagnitude < 1e-6f) return;
+
+        float drop = Mathf.Min(horiz.magnitude, data.decelGround * dt);
+        velocity -= horiz.normalized * drop;
+    }
+
+    // ---------- Glissade ----------
+    struct SlopeInfo { public float sin; public Vector3 dir; } // dir = downhill on plane
+    SlopeInfo GetSlopeInfo(Vector3 n)
+    {
+        float cos = Mathf.Clamp01(Vector3.Dot(n, Vector3.up));
+        float sin = Mathf.Sqrt(Mathf.Max(0f, 1f - cos * cos));
+        Vector3 dir = Vector3.ProjectOnPlane(Vector3.down, n).normalized;
+        return new SlopeInfo { sin = sin, dir = dir };
     }
 
     void ApplySlopeSlide(Vector3 n, float dt)
     {
         slopeTimer += dt;
 
-        // garder la vitesse collée au plan
+        // Coller la vitesse au plan
         velocity = Vector3.ProjectOnPlane(velocity, n);
 
-        // direction de glisse = gravité projetée sur le plan
-        // (utilise la gravité courante pour que la glisse s'accélère "naturellement")
+        var s = GetSlopeInfo(n);
+
+        // Gravité effective (progressive)
         float t = Mathf.Clamp01(timeInAir / Mathf.Max(0.0001f, data.gravityRampTime));
-        float g = Mathf.Lerp(data.gravityBase, data.gravityMax, t);
+        float gEff = Mathf.Lerp(data.gravityBase, data.gravityMax, t) * data.slopeGravityFactor;
 
-        Vector3 slopeDir = Vector3.ProjectOnPlane(Vector3.down, n).normalized;
-        float overLimit = Mathf.Clamp01((Vector3.Angle(n, Vector3.up) - controller.slopeLimit) / (89.9f - controller.slopeLimit));
+        // Profil d’angle + boost avec le temps
+        float angleFactor = Mathf.Pow(s.sin, data.slopeAnglePower);
+        float boost = (data.slopeSlideBaseAccel + data.slopeSlideAccelPerSec * slopeTimer) * angleFactor;
 
-        float accel = (data.slopeSlideBaseAccel + data.slopeSlideAccelPerSec * slopeTimer);
-        Vector3 slideAccel = slopeDir * (g * 0.35f + accel) * Mathf.Max(0.15f, overLimit); // mix gravité projetée + boost
-
+        Vector3 slideAccel = s.dir * (gEff * s.sin + boost);
         velocity += slideAccel * dt;
 
-        // clamp horizontal
+        // Clamp horizontal
         Vector3 horiz = Vector3.ProjectOnPlane(velocity, Vector3.up);
         if (horiz.magnitude > data.slopeSlideMaxSpeed)
             velocity = horiz.normalized * data.slopeSlideMaxSpeed + Vector3.up * velocity.y;
     }
 
+    // ---------- Gravité ----------
     void ApplyProgressiveGravity(float dt)
     {
-        // si au sol sur pente non raide, verrouille la verticale
+        // Collé au sol (walkable) = petite valeur constante
         if (isGrounded && !IsTooSteep(groundNormal))
         {
             velocity.y = -2f;
@@ -216,62 +266,49 @@ public class Player : MonoBehaviour
 
         float t = Mathf.Clamp01(timeInAir / Mathf.Max(0.0001f, data.gravityRampTime));
         float g = Mathf.Lerp(data.gravityBase, data.gravityMax, t);
-        velocity.y -= g * dt;
+        velocity.y -= (g * gravityScale) * dt;
 
-        // Clamp terminal
+        // Vitesse terminale
         if (velocity.y < -data.terminalVelocity)
             velocity.y = -data.terminalVelocity;
     }
 
-    void ApplyGroundFriction(float dt)
-    {
-        Vector3 horiz = Vector3.ProjectOnPlane(velocity, Vector3.up);
-        float drop = Mathf.Min(horiz.magnitude, data.decelGround * dt);
-        velocity -= horiz.normalized * drop;
-    }
+    // ---------- Sauts ----------
+    public bool CanGroundJump() => isGrounded && !IsTooSteep(groundNormal);
 
-    // ---------- Jumps ----------
-    bool CanJump()
+    public bool CanJump()
     {
-        // au sol (direct) ou coyote + compteurs
         bool groundedOrCoyote = isGrounded || (coyoteTimer <= data.coyoteTime);
-        if (groundedOrCoyote && jumpCount == 0) return true; // premier saut
-        return jumpCount < data.maxJumps;
+        if (jumpCount == 0) return groundedOrCoyote;                // premier saut : au sol ou coyote
+        return jumpCount > 0 && jumpCount < data.maxJumps;         // sauts aériens
     }
 
-    void DoJumpFromGround()
+    public void DoJumpFromGround()
     {
         jumpBufferTimer = 0f;
         jumpCount = 1;
         timeInAir = 0f;
         float v0 = Mathf.Sqrt(2f * data.gravityBase * data.jumpHeight);
-        velocity.y = v0;         // <-- set, pas add
+        velocity.y = v0; // set, pas add
         isGrounded = false;
     }
 
-    void DoJumpInAir()
+    public void DoJumpInAir()
     {
         jumpBufferTimer = 0f;
         jumpCount = Mathf.Max(jumpCount + 1, 1);
         timeInAir = 0f;
         float v0 = Mathf.Sqrt(2f * data.gravityBase * data.jumpHeight);
-        velocity.y = v0;         // <-- set, pas add ni max()
+        velocity.y = v0; // set, pas add
     }
 
-    // ---------- Facing ----------
-    void FaceMovementDirection()
-    {
-        Vector3 horiz = Vector3.ProjectOnPlane(velocity, Vector3.up);
-        if (horiz.sqrMagnitude > 0.01f)
-        {
-            Quaternion target = Quaternion.LookRotation(horiz.normalized, Vector3.up);
-            transform.rotation = Quaternion.Slerp(transform.rotation, target, 0.2f);
-        }
+    // Buffer API (utilisé par les States)
+    public void PushJumpBuffer() => jumpBufferTimer = data.jumpBuffer;
+    public void ClearJumpBuffer() => jumpBufferTimer = 0f;
+    public bool HasJumpBuffer => jumpBufferTimer > 0f;
+    public void DecayJumpBuffer(float dt) => jumpBufferTimer = Mathf.Max(0f, jumpBufferTimer - dt);
 
-        // Optionnel : appliquer l’input Look ici si tu veux séparer l’orientation caméra
-        // (ex: yaw += input.Look.x * sens; pitch géré ailleurs)
-    }
-
+    // ---------- Look ----------
     void ApplyLook()
     {
         Vector2 look = input.Look;
@@ -279,14 +316,11 @@ public class Player : MonoBehaviour
         pitch -= look.y * mouseSensitivity;
         pitch = Mathf.Clamp(pitch, -85f, 85f);
 
-        // Yaw sur le joueur
         transform.rotation = Quaternion.Euler(0f, yaw, 0f);
-
-        // Pitch sur un pivot de caméra si assigné
         if (cameraPivot != null)
             cameraPivot.localRotation = Quaternion.Euler(pitch, 0f, 0f);
 
-        // Toggle lock avec Échap
+        // Toggle lock
         if (Keyboard.current != null && Keyboard.current.escapeKey.wasPressedThisFrame)
         {
             if (Cursor.lockState == CursorLockMode.Locked)
@@ -296,7 +330,17 @@ public class Player : MonoBehaviour
         }
     }
 
-    // API pour les States (quand tu les ajouteras)
+    // ---------- Utils ----------
+    void SetStepOffset(float v)
+    {
+        if (Mathf.Abs(lastStepOffset - v) > 0.0001f)
+        {
+            controller.stepOffset = v;
+            lastStepOffset = v;
+        }
+    }
+
+    // ---------- API pour States (exposition) ----------
     public void ForceAddVelocity(Vector3 v) => velocity += v;
     public void SetVelocity(Vector3 v) => velocity = v;
     public CharacterController Controller => controller;
