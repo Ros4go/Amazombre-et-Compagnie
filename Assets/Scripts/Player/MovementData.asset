@@ -1,0 +1,40 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 8d07c5bd5af3ac94eb64c9fac2c92002, type: 3}
+  m_Name: MovementData
+  m_EditorClassIdentifier: 
+  maxGroundSpeed: 12
+  accelGround: 80
+  decelGround: 90
+  slopeSlideThresholdDeg: 45
+  slopeSlideBaseAccel: 10
+  slopeSlideAccelPerSec: 16
+  slopeSlideMaxSpeed: 40
+  maxAirSpeed: 14
+  accelAir: 50
+  airControlAscendFactor: 0.6
+  airControlDescendFactor: 1
+  gravityBase: 25
+  gravityMax: 60
+  gravityRampTime: 0.8
+  jumpHeight: 2.2
+  maxJumps: 2
+  coyoteTime: 0.12
+  jumpBuffer: 0.15
+  terminalVelocity: 80
+  dashStrength: 20
+  dashDuration: 0.15
+  dashCooldown: 0.5
+  groundCheckExtra: 0.08
+  groundMask:
+    serializedVersion: 2
+    m_Bits: 4294967295
