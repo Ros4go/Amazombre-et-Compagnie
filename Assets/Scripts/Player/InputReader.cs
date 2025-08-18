@@ -1,58 +1,69 @@
 using UnityEngine;
 using UnityEngine.InputSystem;
 
+[DefaultExecutionOrder(-100)]
 public class InputReader : MonoBehaviour
 {
-    [Header("Actions (Input System)")]
-    public InputActionReference moveAction;
-    public InputActionReference lookAction;
-    public InputActionReference jumpAction;
-    public InputActionReference dashAction;
-    public InputActionReference slideAction;
+    [Header("Action Refs (drag depuis l'asset)")]
+    public InputActionReference move;
+    public InputActionReference look;
+    public InputActionReference jump;
+    public InputActionReference dash;
+    public InputActionReference slide;
 
     [Header("Runtime")]
-    public Vector2 Move;      // -1..1
-    public Vector2 Look;      // delta souris / stick
-    public bool JumpPressed;  // press (buffer lu côté Player)
-    public bool DashPressed;
-    public bool SlideHeld;
+    public Vector2 Move;
+    public Vector2 Look;
+    public bool JumpPressed, JumpHeld;
+    public bool DashPressed, SlidePressed, SlideHeld;
+
+    bool _subscribed;
 
     void OnEnable()
     {
-        moveAction?.action.Enable();
-        lookAction?.action.Enable();
-        jumpAction?.action.Enable();
-        dashAction?.action.Enable();
-        slideAction?.action.Enable();
+        TryEnable(move); if (move && move.action != null) { move.action.performed += OnMovePerf; move.action.canceled += OnMovePerf; _subscribed = true; }
+        TryEnable(look); if (look && look.action != null) { look.action.performed += OnLookPerf; look.action.canceled += OnLookPerf; _subscribed = true; }
 
-        jumpAction.action.performed += OnJump;
-        dashAction.action.performed += OnDash;
+        TryEnable(jump); if (jump && jump.action != null) { jump.action.started += OnJumpStarted; jump.action.canceled += OnJumpCanceled; _subscribed = true; }
+        TryEnable(dash); if (dash && dash.action != null) { dash.action.started += OnDashStarted; _subscribed = true; }
+        TryEnable(slide); if (slide && slide.action != null) { slide.action.started += OnSlideStarted; slide.action.canceled += OnSlideCanceled; _subscribed = true; }
     }
 
     void OnDisable()
     {
-        jumpAction.action.performed -= OnJump;
-        dashAction.action.performed -= OnDash;
+        if (_subscribed)
+        {
+            if (move && move.action != null) { move.action.performed -= OnMovePerf; move.action.canceled -= OnMovePerf; }
+            if (look && look.action != null) { look.action.performed -= OnLookPerf; look.action.canceled -= OnLookPerf; }
+            if (jump && jump.action != null) { jump.action.started -= OnJumpStarted; jump.action.canceled -= OnJumpCanceled; }
+            if (dash && dash.action != null) { dash.action.started -= OnDashStarted; }
+            if (slide && slide.action != null) { slide.action.started -= OnSlideStarted; slide.action.canceled -= OnSlideCanceled; }
+        }
 
-        moveAction?.action.Disable();
-        lookAction?.action.Disable();
-        jumpAction?.action.Disable();
-        dashAction?.action.Disable();
-        slideAction?.action.Disable();
+        TryDisable(move); TryDisable(look); TryDisable(jump); TryDisable(dash); TryDisable(slide);
+        _subscribed = false;
     }
 
-    void Update()
+    void OnMovePerf(InputAction.CallbackContext ctx) => Move = ctx.ReadValue<Vector2>();
+    void OnLookPerf(InputAction.CallbackContext ctx) => Look = ctx.ReadValue<Vector2>();
+    void OnJumpStarted(InputAction.CallbackContext ctx) { JumpPressed = true; JumpHeld = true; }
+    void OnJumpCanceled(InputAction.CallbackContext ctx) { JumpHeld = false; }
+    void OnDashStarted(InputAction.CallbackContext ctx) { DashPressed = true; }
+    void OnSlideStarted(InputAction.CallbackContext ctx) { SlidePressed = true; SlideHeld = true; }
+    void OnSlideCanceled(InputAction.CallbackContext ctx) { SlideHeld = false; }
+
+    void LateUpdate()
     {
-        Move = moveAction?.action.ReadValue<Vector2>() ?? Vector2.zero;
-        Look = lookAction?.action.ReadValue<Vector2>() ?? Vector2.zero;
-        SlideHeld = (slideAction != null) && slideAction.action.IsPressed();
-        // JumpPressed/DashPressed sont des impulsions : consommées par Player.
+        // reset des "pressed" frame-based
+        JumpPressed = DashPressed = SlidePressed = false;
     }
 
-    void OnJump(InputAction.CallbackContext ctx) => JumpPressed = true;
-    void OnDash(InputAction.CallbackContext ctx) => DashPressed = true;
-
-    // Utilisées par le Player pour consommer les impulsions proprement
-    public bool ConsumeJumpPressed() { var b = JumpPressed; JumpPressed = false; return b; }
-    public bool ConsumeDashPressed() { var b = DashPressed; DashPressed = false; return b; }
+    static void TryEnable(InputActionReference aref)
+    {
+        if (aref != null && aref.action != null && !aref.action.enabled) aref.action.Enable();
+    }
+    static void TryDisable(InputActionReference aref)
+    {
+        if (aref != null && aref.action != null && aref.action.enabled) aref.action.Disable();
+    }
 }

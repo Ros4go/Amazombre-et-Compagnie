@@ -2,61 +2,61 @@ using UnityEngine;
 
 public class GroundedState : IState
 {
-    private readonly Player p;
+    readonly Player p;
 
     public GroundedState(Player player) { p = player; }
 
     public void Enter()
     {
-        p.gravityScale = 1f;
-        p.timeInAir = 0f;
-        p.coyoteTimer = 0f;
-        if (p.jumpCount > 0) p.jumpCount = 0;
+        p.ignoreGravity = false;
+        p.jumpCount = 0;
     }
 
-    public void Tick()
+    public void Tick(float dt)
     {
-        float dt = Time.deltaTime;
+        if (!p.isGrounded) { p.FSM.ChangeState(new JumpState(p)); return; }
 
-        // Jump buffer (si appui avant l'atterrissage)
-        if (p.input.ConsumeJumpPressed())
-            p.PushJumpBuffer();
-        else
-            p.DecayJumpBuffer(dt);
-
-        // Mouvement au sol
-        Vector3 wish = p.GetWishDirectionOnPlane();
-        if (wish.sqrMagnitude < 1e-6f)
-            p.ApplyGroundFriction(dt);
-        else
-            p.ApplyGroundAcceleration(wish, dt);
-
-        // Saut sol (pente walkable uniquement)
-        if (p.HasJumpBuffer && p.CanGroundJump())
+        if (p.input)
         {
-            ApplyHorizontalJumpBonus();
-            p.DoJumpFromGround();
-            p.ClearJumpBuffer();
-            p.FSM.ChangeState(new AirState(p));
-            return;
+            // Slide au sol
+            if (p.input.SlidePressed && p.CanStartSlide()) { p.FSM.ChangeState(new SlideState(p)); return; }
+
+            // Dash
+            if (p.input.DashPressed && p.CanDash()) { p.FSM.ChangeState(new DashState(p)); return; }
+
+            // Jump (instant + buffer)
+            bool wantJump = p.input.JumpPressed || p.pjumpBuffered();
+            if (wantJump && p.CanJumpFromGround())
+            {
+                p.DoJump();
+                p.FSM.ChangeState(new JumpState(p));
+                return;
+            }
         }
 
-        // Sortie si on n’est plus au sol
-        if (!p.isGrounded)
-        {
-            p.FSM.ChangeState(new AirState(p));
-        }
+        // Move sol
+        Vector3 wish = p.WishDir();
+        float wishMag = Mathf.Clamp01(wish.magnitude);
+        Vector3 wishN = wishMag > 0f ? wish / wishMag : Vector3.zero;
+
+        Vector3 planar = new Vector3(p.velocity.x, 0f, p.velocity.z);
+        float targetSpeed = p.data.maxGroundSpeed * wishMag;
+        Vector3 targetVel = wishN * targetSpeed;
+
+        Vector3 delta = targetVel - planar;
+        float accel = (targetSpeed > planar.magnitude) ? p.data.groundAccel : p.data.groundDecel;
+        planar += Vector3.ClampMagnitude(delta, accel * dt);
+
+        p.velocity.x = planar.x;
+        p.velocity.z = planar.z;
+
+        if (p.velocity.y > -2f) p.velocity.y = -2f;
     }
 
     public void Exit() { }
+}
 
-    // Petit bonus horizontal dépendant de la vitesse (sauts longs)
-    void ApplyHorizontalJumpBonus()
-    {
-        float horiz = p.HorizontalSpeed;
-        float t = Mathf.Clamp01(horiz / Mathf.Max(0.01f, p.data.maxGroundSpeed));
-        float bonus = Mathf.Lerp(0f, p.data.jumpHorizBonusMax, t); // ex: jusqu’à +8 %
-        Vector3 h = Vector3.ProjectOnPlane(p.velocity, Vector3.up);
-        p.velocity = h * (1f + bonus) + Vector3.up * p.velocity.y;
-    }
+static class PlayerJumpBufferExt
+{
+    public static bool pjumpBuffered(this Player p) => p.jumpBufferTimer > 0f;
 }

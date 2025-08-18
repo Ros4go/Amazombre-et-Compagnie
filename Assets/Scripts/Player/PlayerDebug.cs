@@ -1,89 +1,124 @@
 using UnityEngine;
+using System.Reflection;
 
 public class PlayerDebug : MonoBehaviour
 {
-    [System.NonSerialized] public Player player;
+    [Header("Refs")]
+    public Player player;
 
     [Header("UI")]
     public KeyCode toggleKey = KeyCode.F3;
     public bool visible = true;
-    public Vector2 origin = new Vector2(10, 10);
-    public Vector2 size = new Vector2(460, 340);
+    public Vector2 origin = new Vector2(12, 12);
+    public float width = 420f;
     public int fontSize = 14;
 
-    bool dirty;
+    // barre de progression
+    Texture2D _tex;
+    GUIStyle _label;
 
-    public void SetDirty() => dirty = true;
+    void Awake()
+    {
+        if (_tex == null)
+        {
+            _tex = new Texture2D(1, 1, TextureFormat.RGBA32, false);
+            _tex.SetPixel(0, 0, Color.white);
+            _tex.Apply();
+        }
+    }
 
     void OnGUI()
     {
         if (!visible || player == null) return;
 
-        var style = new GUIStyle(GUI.skin.label) { fontSize = fontSize, richText = true };
-        GUILayout.BeginArea(new Rect(origin.x, origin.y, size.x, size.y), GUI.skin.box);
+        if (_label == null)
+        {
+            _label = new GUIStyle(GUI.skin.label) { fontSize = fontSize, richText = true };
+        }
+
+        float line = 0f;
+        Rect Area(float h) => new Rect(origin.x, origin.y + line, width, h);
+
+        // Conteneur
+        GUI.Box(Area(230f), GUIContent.none);
+        float pad = 8f;
+        Rect r = new Rect(origin.x + pad, origin.y + pad, width - pad * 2f, 999f);
+        GUILayout.BeginArea(r);
 
         // Header
-        GUILayout.Label("<b>Amazombre Debug</b>", style);
+        GUILayout.Label("<b>Amazombre Debug</b>", _label);
 
         // State
-        string stateName = player.FSM != null && player.FSM.Current != null
+        string state = (player.FSM != null && player.FSM.Current != null)
             ? player.FSM.Current.GetType().Name
             : "None";
-        GUILayout.Label($"State: {stateName}", style);
+        GUILayout.Label($"State: <b>{state}</b>", _label);
 
-        // Vitesse
-        var horiz = Vector3.ProjectOnPlane(player.velocity, Vector3.up);
-        GUILayout.Label($"Speed Horiz: {horiz.magnitude:F2}", style);
-        GUILayout.Label($"Vel: {player.velocity}", style);
-        GUILayout.Label($"VelY: {player.velocity.y:F2}", style);
+        // Vélocité
+        Vector3 vel = player.velocity;
+        Vector3 horiz = Vector3.ProjectOnPlane(vel, Vector3.up);
+        GUILayout.Label($"Speed Horiz: <b>{horiz.magnitude:F2}</b>  |  Speed Tot: <b>{vel.magnitude:F2}</b>", _label);
+        GUILayout.Label($"VelY: <b>{vel.y:F2}</b>   Grounded: <b>{player.isGrounded}</b>", _label);
 
-        // Grounding / Pente
-        GUILayout.Space(4);
-        GUILayout.Label("<b>Ground</b>", style);
-        GUILayout.Label($"Grounded: {player.isGrounded}", style);
-        GUILayout.Label($"NearSteepSlope: {player.nearSteepSlope}", style);
-        GUILayout.Label($"GroundDist: {player.groundDistance:F3}", style);
-        GUILayout.Label($"GroundNormal: {player.groundNormal}", style);
-        GUILayout.Label($"SlopeAngle: {player.SlopeAngleDeg:F1} deg", style);
-        bool tooSteep = player.IsTooSteep(player.groundNormal);
-        GUILayout.Label($"IsTooSteep: {tooSteep} (walkableLimit={player.Controller.slopeLimit:F1} deg / slideThreshold={player.data.slopeSlideThresholdDeg:F1} deg)", style);
+        // Jumps
+        int maxJumps = player.data != null ? player.data.maxJumps : 1;
+        GUILayout.Label($"Jumps: <b>{player.jumpCount}</b> / <b>{maxJumps}</b>", _label);
 
-        // Jumps / Timers
-        GUILayout.Space(4);
-        GUILayout.Label("<b>Jump</b>", style);
-        GUILayout.Label($"Jumps: {player.jumpCount}/{player.data.maxJumps}", style);
-        GUILayout.Label($"Coyote: {player.coyoteTimer:F3} / {player.data.coyoteTime:F3}", style);
-        GUILayout.Label($"TimeInAir: {player.timeInAir:F3}", style);
-        GUILayout.Label($"SlopeTimer: {player.slopeTimer:F3}", style);
+        // Dashes
+        int dashMax = player.data != null ? player.data.dashMaxCharges : 1;
+        int dashNow = player.dashCharges;
+        float cdRemain = GetPrivateFloat(player, "dashCooldownTimer");   // secondes avant début recharge
+        float rechargeT = player.data != null ? Mathf.Max(0.0001f, player.data.dashRechargeTime) : 1f;
+        float rechargeV = GetPrivateFloat(player, "dashRechargeTimer");  // temps accumulé sur recharge en cours
+        float progress = Mathf.Clamp01(rechargeV / rechargeT);
 
-        // Inputs
-        GUILayout.Space(4);
-        GUILayout.Label("<b>Input</b>", style);
-        if (player.input != null)
+        GUILayout.Label($"Dash: <b>{dashNow}</b> / <b>{dashMax}</b>", _label);
+
+        if (cdRemain > 0f)
         {
-            GUILayout.Label($"Move: {player.input.Move}", style);
-            GUILayout.Label($"Look: {player.input.Look}", style);
+            GUILayout.Label($"Cooldown: <b>{cdRemain:F2}s</b>", _label);
+            DrawProgressBar("Recharge", 0f, Color.gray);
+        }
+        else if (dashNow < dashMax)
+        {
+            GUILayout.Label($"Recharge: <b>{progress * 100f:F0}%</b>", _label);
+            DrawProgressBar("Recharge", progress, new Color(0.2f, 0.8f, 1f, 1f));
         }
         else
         {
-            GUILayout.Label("Input: (null)", style);
+            GUILayout.Label("Recharge: <b>OK</b>", _label);
+            DrawProgressBar("Recharge", 1f, new Color(0.2f, 1f, 0.4f, 1f));
         }
 
-        // Params utiles
-        GUILayout.Space(4);
-        GUILayout.Label("<b>Params</b>", style);
-        GUILayout.Label($"MaxGroundSpeed: {player.data.maxGroundSpeed:F1}  |  MaxAirSpeed: {player.data.maxAirSpeed:F1}", style);
-        GUILayout.Label($"Uphill scales  speed={player.data.uphillSpeedScale:F2}  accel={player.data.uphillAccelScale:F2}", style);
-
         GUILayout.EndArea();
-        dirty = false;
     }
 
-    void OnDrawGizmosSelected()
+    void DrawProgressBar(string label, float t, Color c)
     {
-        if (player == null) return;
-        Gizmos.color = Color.yellow;
-        Vector3 p = player.transform.position + Vector3.up * 0.05f;
-        Gizmos.DrawRay(p, -player.groundNormal * 1.0f);
+        float h = 18f;
+        Rect bar = GUILayoutUtility.GetRect(GUIContent.none, GUIStyle.none, GUILayout.Height(h));
+        // fond
+        GUI.color = new Color(0f, 0f, 0f, 0.35f);
+        GUI.DrawTexture(bar, _tex);
+        // fill
+        GUI.color = c;
+        GUI.DrawTexture(new Rect(bar.x, bar.y, bar.width * Mathf.Clamp01(t), bar.height), _tex);
+        // cadre
+        GUI.color = Color.white;
+        GUI.Box(bar, GUIContent.none);
+        // label
+        var centered = new GUIStyle(GUI.skin.label) { alignment = TextAnchor.MiddleCenter, fontSize = fontSize - 1 };
+        GUI.Label(bar, label, centered);
+        GUI.color = Color.white;
+    }
+
+    // Récupère un float privé par réflexion (debug only)
+    static float GetPrivateFloat(object obj, string fieldName)
+    {
+        if (obj == null) return 0f;
+        var f = obj.GetType().GetField(fieldName, BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public);
+        if (f != null && f.FieldType == typeof(float))
+            return (float)f.GetValue(obj);
+        return 0f;
     }
 }

@@ -1,0 +1,47 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 8d07c5bd5af3ac94eb64c9fac2c92002, type: 3}
+  m_Name: DefaultMovementData
+  m_EditorClassIdentifier: 
+  gravity: 25
+  jumpHeight: 3
+  maxJumps: 3
+  coyoteTime: 0.1
+  jumpBufferTime: 0.12
+  maxGroundSpeed: 15
+  groundAccel: 50
+  groundDecel: 80
+  maxAirSpeed: 10
+  airAccel: 25
+  airDecel: 2
+  dashSpeed: 26
+  dashDuration: 0.1
+  dashMaxCharges: 2
+  dashRechargeDelay: 0.6
+  dashRechargeTime: 1.2
+  crouchHeight: 0.2
+  slideSpeed: 13
+  slideCooldown: 0.35
+  standClearTime: 0.08
+  slideInputThreshold: 0.2
+  slideTurnRateDeg: 32
+  slideStickDownVel: 8
+  slideSnapProbe: 0.6
+  crouchWalkSpeed: 5.5
+  crouchAccel: 40
+  crouchDecel: 35
+  slamDownForce: 40
+  slamLockTime: 0.1
+  mouseSensitivity: 6
+  headbobAmplitude: 0.025
+  headbobFrequency: 11
+  camPitchClamp: 85

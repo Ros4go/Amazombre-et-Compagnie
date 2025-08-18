@@ -1,10 +1,8 @@
-using UnityEngine;
-
 public interface IState
 {
     void Enter();
+    void Tick(float dt);
     void Exit();
-    void Tick();  // logique d'état (ne pas appeler CharacterController.Move ici)
 }
 
 public class StateMachine
@@ -13,11 +11,13 @@ public class StateMachine
 
     public void ChangeState(IState next)
     {
+        if (next == null) return;
         if (Current == next) return;
+
         Current?.Exit();
         Current = next;
         Current?.Enter();
     }
 
-    public void Tick() => Current?.Tick();
+    public void Tick(float dt) => Current?.Tick(dt);
 }
