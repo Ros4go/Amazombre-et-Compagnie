@@ -13,23 +13,23 @@ MonoBehaviour:
   m_Name: DefaultMovementData
   m_EditorClassIdentifier: 
   gravity: 25
-  jumpHeight: 3
+  jumpHeight: 5
   maxJumps: 3
   coyoteTime: 0.1
   jumpBufferTime: 0.12
-  maxGroundSpeed: 15
+  maxGroundSpeed: 30
   groundAccel: 50
   groundDecel: 80
-  maxAirSpeed: 10
+  maxAirSpeed: 20
   airAccel: 25
   airDecel: 2
-  dashSpeed: 26
+  dashSpeed: 50
   dashDuration: 0.1
   dashMaxCharges: 2
   dashRechargeDelay: 0.6
   dashRechargeTime: 1.2
   crouchHeight: 0.2
-  slideSpeed: 13
+  slideSpeed: 40
   slideCooldown: 0.35
   standClearTime: 0.08
   slideInputThreshold: 0.2

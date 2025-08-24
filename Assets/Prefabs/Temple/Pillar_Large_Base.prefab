@@ -48,6 +48,10 @@ PrefabInstance:
       propertyPath: m_LocalEulerAnglesHint.z
       value: 0
       objectReference: {fileID: 0}
+    - target: {fileID: -2134559301425299198, guid: ac216b7907ed9c44ab1a73a4b01dd72a, type: 3}
+      propertyPath: m_LocalPosition.y
+      value: 0.1
+      objectReference: {fileID: 0}
     - target: {fileID: 919132149155446097, guid: ac216b7907ed9c44ab1a73a4b01dd72a, type: 3}
       propertyPath: m_Name
       value: Pillar_Large_Base
