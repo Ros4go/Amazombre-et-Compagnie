@@ -87,7 +87,11 @@ public class PlanarReflectionSimple : MonoBehaviour
     {
         if (!_reflectionCam || reflectionRT == null) return;
         var mainCam = Camera.main;
-        if (!mainCam) return;
+        if (!mainCam)
+        {
+            Debug.Log("Error no main cam");
+            return;
+        }
 
         // 0) Assure un RT à même aspect que la main camera (évite bords coupés)
         EnsureRTMatchesMain(mainCam);
